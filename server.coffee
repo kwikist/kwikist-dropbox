@@ -11,22 +11,42 @@ oauth_callback = base_url + '/dropbox/connected'
 
 app = polar.setup_app config.app
 
-# Show the page with a 
-app.get '/', (req, res) ->
-    console.log util.inspect req.session
+# Dropbox authentication middleware
+# Ensures a user is authenticated by inspecting the access token
+# in their session data, redirecting to the connect page otherwise
+auth_dropbox = (req, res, next) ->
     if req.session.access_token
         dropbox_client = dropbox.client req.session.access_token
-
-        dropbox_client.account (status, account_data) ->
-            res.end "You seem to be #{ account_data.display_name }."
-
+        res.locals.dropbox = dropbox_client
+        next()
     else
         res.render 'connect'
 
+# Show the page with a 
+app.get '/', auth_dropbox, (req, res) ->
+    res.locals.dropbox.account (status, account_data) ->
+        res.render 'welcome', account_data
+
+# List files
+app.get /\/dropbox\/files\/(.*)/, auth_dropbox, (req, res) ->
+
+    root_dir = '/' + req.params[0]
+    res.locals.dropbox.metadata root_dir, {root: 'dropbox'}, (status, dir_metadata) ->
+
+        res.render 'files',
+            dir: root_dir
+            files: dir_metadata.contents
+
+# Read a file
+app.get /\/dropbox\/file\/(.*)/, auth_dropbox, (req, res) ->
+
+    filename = '/' + req.params[0]
+    res.locals.dropbox.get filename, {root: 'dropbox'}, (status, file, metadata) ->
+
+        res.end file.toString()
+
 # Keep track of request tokens between authentication steps
-# and the access tokens for successful authentications
 pending_request_tokens = {}
-access_tokens = {}
 
 # Begin the authorization with Dropbox
 app.get '/dropbox/connect', (req, res) ->
@@ -48,7 +68,6 @@ app.get '/dropbox/connected', (req, res) ->
 
         # Create and save the authorized access token
         dropbox.accesstoken request_token, (status, access_token) ->
-            access_tokens[access_token.oauth_token] = access_token
             req.session.access_token = access_token
             req.session.save ->
 
